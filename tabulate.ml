@@ -1,7 +1,6 @@
 open Core.Std
 
 
-
 module Buffer = struct
   type buffer = {
     buffer: string array;
@@ -35,7 +34,6 @@ module Buffer = struct
     buffer.buffer.((next - idx - 1) % len)
 
 end
-
 
 let borders = [| 
   [|"┏";"┳";"┓"|]; 
@@ -130,8 +128,6 @@ let tabulate_lines  ~columns ~show_header ~has_header ~header ~buffer =
     (column_hints, rows) in
   Result.map prepare_table_result ~f:(fun (column_hints, rows) ->  draw_table ~show_header ~column_hints ~rows)
  
-
-
 let read_n_lines buffer chan n =
   let rec loop n = 
     if n > 0 then
@@ -150,24 +146,26 @@ let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
           print_endline line
         )
       | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
+  let tabulate_chan chan = 
+    let header_result = extract_header ~has_header ~header ~chan in
+    let screen_lines = Result.bind header_result (fun (header, first_line) ->
+      Option.iter first_line ~f:(Buffer.add buffer);
+      read_n_lines buffer chan buffer_size;
+      tabulate_lines ~header ~buffer) in
+    print_screen_lines screen_lines in
   match filename with
   | Some filename -> 
-    In_channel.with_file filename ~f:(fun chan ->
-      let header_result = extract_header ~has_header ~header ~chan in
-      let screen_lines = Result.bind header_result (fun (header, first_line) ->
-        Option.iter first_line ~f:(Buffer.add buffer);
-        read_n_lines buffer chan buffer_size;
-        tabulate_lines ~header ~buffer) in
-      print_screen_lines screen_lines)
+    In_channel.with_file filename ~f:tabulate_chan
   | None -> 
-    let chan = In_channel.stdin in
-    let header_result = extract_header ~has_header ~header ~chan in
-      let screen_lines = Result.bind header_result (fun (header, first_line) ->
-        Option.iter first_line ~f:(Buffer.add buffer);
-        read_n_lines buffer chan buffer_size;
-        tabulate_lines ~header ~buffer) in
-      print_screen_lines screen_lines
-  
+    let col_count = Terminal_size.get_columns () in
+    let row_count = Terminal_size.get_rows () in
+    if Option.is_none col_count || Option.is_none row_count then
+      tabulate_chan In_channel.stdin
+    else
+      let row_count = Option.value_exn row_count in
+      let col_count = Option.value_exn col_count in
+      print_string (Printf.sprintf "To implement: cols = %d rows = %d\n" col_count row_count) 
+    
 
 let column_names =
   Command.Spec.Arg_type.create
