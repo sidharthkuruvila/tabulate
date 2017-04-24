@@ -111,7 +111,7 @@ let extract_header ~has_header ~header ~chan =
           let column_id_ints = List.range 0 (List.length header_labels) in
           let column_ids = List.map column_id_ints ~f:(fun n -> "column_" ^ (string_of_int n)) in
           Result.Ok (column_ids, Some header)
-      | [] -> Result.Error "Unable to parse header row"
+      | None -> Result.Error "Unable to parse header row"
 
 
 let tabulate_lines  ~columns ~show_header ~has_header ~header ~lines = 
@@ -158,16 +158,17 @@ let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
         let lines = read_n_lines chan buffer_size in
         let lines = match first_line with 
           | Some line -> line::lines
-          | None -> line
+          | None -> lines in
           tabulate_lines ~header ~lines) in
       print_screen_lines screen_lines)
   | None -> 
+    let chan = In_channel.stdin in
     let header_result = extract_header ~has_header ~header ~chan in
       let screen_lines = Result.bind header_result (fun (header, first_line) ->   
         let lines = read_n_lines chan buffer_size in
         let lines = match first_line with 
           | Some line -> line::lines
-          | None -> line
+          | None -> lines in
           tabulate_lines ~header ~lines) in
       print_screen_lines screen_lines
   
