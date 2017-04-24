@@ -112,14 +112,14 @@ let extract_header ~has_header ~header ~chan =
       | None -> Result.Error "Unable to parse header row"
 
 
-let tabulate_lines  ~columns ~show_header ~has_header ~header ~buffer = 
+let tabulate_lines  ~columns ~show_header ~has_header ~header ~buffer ~count= 
   let open Result.Monad_infix in
-  let rows = List.init (Buffer.length buffer) ~f:(fun n -> 
+  let rows = List.init count ~f:(fun n -> 
     let line = Buffer.get buffer n in
     String.split ~on:'\t' line) in 
   let prepare_table_result = 
     List.transpose rows |> Result.of_option ~error:"Column counts not the same for all rows" >>= fun transposed ->
-    List.zip header transposed |> Result.of_option ~error:"Header sized does not match column count" >>| fun columns -> 
+    List.zip header transposed |> Result.of_option ~error:"Header size does not match column count" >>| fun columns -> 
     let column_hints = List.map columns ~f:(fun (label, column) -> 
       let width = Option.value_exn (List.max_elt (List.map ~f:String.length (label::column))
         ~cmp:(fun a b -> a - b)) in
@@ -139,32 +139,54 @@ let read_n_lines buffer chan n =
 let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
   let buffer = Buffer.init buffer_size in
   let tabulate_lines = tabulate_lines ~columns ~show_header ~has_header in 
-  let print_screen_lines lines_result =
-    match lines_result with 
-      | Result.Ok lines ->
-        List.iter lines ~f:(fun line ->
-          print_endline line
-        )
-      | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
+  let render lines = 
+    List.iter lines ~f:(fun line ->
+      print_endline line
+    ) in
   let tabulate_chan chan = 
     let header_result = extract_header ~has_header ~header ~chan in
     let screen_lines = Result.bind header_result (fun (header, first_line) ->
       Option.iter first_line ~f:(Buffer.add buffer);
       read_n_lines buffer chan buffer_size;
-      tabulate_lines ~header ~buffer) in
-    print_screen_lines screen_lines in
+      tabulate_lines ~header ~buffer ~count:(Buffer.length buffer)) in
+    match screen_lines with
+    | Result.Ok lines -> render lines
+    | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
   match filename with
   | Some filename -> 
     In_channel.with_file filename ~f:tabulate_chan
   | None -> 
+    let chan = In_channel.stdin in
     let col_count = Terminal_size.get_columns () in
     let row_count = Terminal_size.get_rows () in
     if Option.is_none col_count || Option.is_none row_count then
-      tabulate_chan In_channel.stdin
+      tabulate_chan chan
     else
       let row_count = Option.value_exn row_count in
       let col_count = Option.value_exn col_count in
-      print_string (Printf.sprintf "To implement: cols = %d rows = %d\n" col_count row_count) 
+      let header_result = extract_header ~has_header ~header ~chan in
+      Result.iter header_result ~f:(fun (header, first_line) ->
+        match first_line with
+          | Some first_line -> Buffer.add buffer first_line
+          | None -> Option.iter (In_channel.input_line chan) ~f:(Buffer.add buffer);
+        let count = min row_count (Buffer.length buffer) in
+        let screen_lines = tabulate_lines ~header ~buffer ~count in
+        let rec loop screen_lines =
+          let screen_lines_count = List.length screen_lines in
+          Option.iter (In_channel.input_line chan) ~f:(fun line ->
+            Buffer.add buffer line;
+            let count = min row_count (Buffer.length buffer) in
+            let updated_screen_lines = tabulate_lines ~header ~buffer ~count in
+            match updated_screen_lines with
+            | Result.Ok lines -> 
+                Printf.printf "\x1B[%d;0f" (row_count - screen_lines_count);
+                render lines; 
+                loop lines
+            | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg) in
+        match screen_lines with
+        | Result.Ok lines -> render lines; loop lines
+        | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg)
+      (* print_string (Printf.sprintf "To implement: cols = %d rows = %d\n" col_count row_count)  *)
     
 
 let column_names =
