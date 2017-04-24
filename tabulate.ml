@@ -99,26 +99,25 @@ let draw_table ~show_header ~column_hints ~rows =
   ]
 
 
-let extract_header ~has_header ~header ~lines = 
+let extract_header ~has_header ~header ~chan = 
   match header with 
-    | Some header -> Result.Ok (header, lines)
-    | None -> match lines with
-      | header::rest ->  
+    | Some header -> Result.Ok (header, None)
+    | None -> match In_channel.input_line chan with
+      | Some header ->  
         let header_labels = String.split ~on:'\t' header in
         if has_header then 
-          Result.Ok (header_labels, rest) 
+          Result.Ok (header_labels, None) 
         else 
           let column_id_ints = List.range 0 (List.length header_labels) in
           let column_ids = List.map column_id_ints ~f:(fun n -> "column_" ^ (string_of_int n)) in
-          Result.Ok (column_ids, lines)
+          Result.Ok (column_ids, Some header)
       | [] -> Result.Error "Unable to parse header row"
 
 
-let tabulate_lines ~header ~columns ~show_header ~has_header ~lines = 
+let tabulate_lines  ~columns ~show_header ~has_header ~header ~lines = 
   let open Result.Monad_infix in
-  let header_result = extract_header ~has_header ~header ~lines in
-  let prepare_table_result = header_result >>= fun (header, lines) ->
-    let rows = List.map ~f:(fun line -> String.split ~on:'\t' line) lines in 
+  let rows = List.map ~f:(fun line -> String.split ~on:'\t' line) lines in 
+  let prepare_table_result = 
     List.transpose rows |> Result.of_option ~error:"Column counts not the same for all rows" >>= fun transposed ->
     List.zip header transposed |> Result.of_option ~error:"Header sized does not match column count" >>| fun columns -> 
     let column_hints = List.map columns ~f:(fun (label, column) -> 
@@ -129,30 +128,21 @@ let tabulate_lines ~header ~columns ~show_header ~has_header ~lines =
     (column_hints, rows) in
   Result.map prepare_table_result ~f:(fun (column_hints, rows) ->  draw_table ~show_header ~column_hints ~rows)
  
-let read_n_lines filename n = 
-  In_channel.with_file filename ~f:(fun chan ->
-    let rec loop n = 
-      if n = 0 then
-        []
-      else 
-        match In_channel.input_line chan with
-          | Some line -> line::(loop n)
-          | None -> [] in
-    loop n)
 
-let read_n_lines_chan chan n = 
-    let rec loop n = 
-      if n = 0 then
-        []
-      else 
-        match In_channel.input_line chan with
-          | Some line -> line::(loop n)
-          | None -> [] in
-    loop n
+
+let read_n_lines chan n = 
+  let rec loop n = 
+    if n = 0 then
+      []
+    else 
+      match In_channel.input_line chan with
+        | Some line -> line::(loop n)
+        | None -> [] in
+  loop n
 
 let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
   let buffer = Buffer.init buffer_size in
-  let tabulate_lines = tabulate_lines ~header ~columns ~show_header ~has_header in 
+  let tabulate_lines = tabulate_lines ~columns ~show_header ~has_header in 
   let print_screen_lines lines_result =
     match lines_result with 
       | Result.Ok lines ->
@@ -162,12 +152,24 @@ let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
       | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
   match filename with
   | Some filename -> 
-    let lines = read_n_lines filename buffer_size in
-    let screen_lines = tabulate_lines ~lines in
-    print_screen_lines screen_lines
+    In_channel.with_file filename ~f:(fun chan ->
+      let header_result = extract_header ~has_header ~header ~chan in
+      let screen_lines = Result.bind header_result (fun (header, first_line) ->   
+        let lines = read_n_lines chan buffer_size in
+        let lines = match first_line with 
+          | Some line -> line::lines
+          | None -> line
+          tabulate_lines ~header ~lines) in
+      print_screen_lines screen_lines)
   | None -> 
-    let screen_lines = tabulate_lines ~lines:(read_n_lines_chan In_channel.stdin buffer_size) in
-    print_screen_lines screen_lines
+    let header_result = extract_header ~has_header ~header ~chan in
+      let screen_lines = Result.bind header_result (fun (header, first_line) ->   
+        let lines = read_n_lines chan buffer_size in
+        let lines = match first_line with 
+          | Some line -> line::lines
+          | None -> line
+          tabulate_lines ~header ~lines) in
+      print_screen_lines screen_lines
   
 
 let column_names =
