@@ -1,5 +1,42 @@
 open Core.Std
 
+
+
+module Buffer = struct
+  type buffer = {
+    buffer: string array;
+    mutable next: int;
+    mutable last: int;
+  }
+
+  let init size = 
+    {
+      buffer = Array.create ~len:(size+1) "";
+      next = 0;
+      last = 0
+    }
+
+  let add buffer s =
+    let len = Array.length buffer.buffer in
+    if (buffer.next + 1) % len = buffer.last then begin
+      buffer.last <- (buffer.last + 1) % len
+    end;
+    buffer.buffer.(buffer.next) <- s;
+    buffer.next <- (buffer.next + 1) % len
+    
+
+  let length buffer =
+    (buffer.next - buffer.last) % (Array.length buffer.buffer)
+
+  let get buffer idx =
+    let len = Array.length buffer.buffer in
+    assert (idx < len && idx < length buffer);
+    let next = buffer.next in
+    buffer.buffer.((next - idx - 1) % len)
+
+end
+
+
 let borders = [| 
   [|"┏";"┳";"┓"|]; 
   [|"┣";"╋";"┫"|]; 
@@ -47,7 +84,7 @@ let draw_separator index column_hints =
   let cell_fn {width; _} = draw_n width hline in
   draw_row index cell_fn column_hints
 
-let draw_table show_header column_hints rows =
+let draw_table ~show_header ~column_hints ~rows =
   List.concat [
     [draw_separator borders.(0) column_hints];
     if show_header then
@@ -62,7 +99,7 @@ let draw_table show_header column_hints rows =
   ]
 
 
-let extract_header has_header header lines = 
+let extract_header ~has_header ~header ~lines = 
   match header with 
     | Some header -> Result.Ok (header, lines)
     | None -> match lines with
@@ -77,9 +114,9 @@ let extract_header has_header header lines =
       | [] -> Result.Error "Unable to parse header row"
 
 
-let tabulate_lines header columns show_header has_header lines = 
+let tabulate_lines ~header ~columns ~show_header ~has_header ~lines = 
   let open Result.Monad_infix in
-  let header_result = extract_header has_header header lines in
+  let header_result = extract_header ~has_header ~header ~lines in
   let prepare_table_result = header_result >>= fun (header, lines) ->
     let rows = List.map ~f:(fun line -> String.split ~on:'\t' line) lines in 
     List.transpose rows |> Result.of_option ~error:"Column counts not the same for all rows" >>= fun transposed ->
@@ -90,10 +127,32 @@ let tabulate_lines header columns show_header has_header lines =
       {label; width}
     ) in
     (column_hints, rows) in
-  Result.map prepare_table_result ~f:(fun (column_hints, rows) ->  draw_table show_header column_hints rows)
+  Result.map prepare_table_result ~f:(fun (column_hints, rows) ->  draw_table ~show_header ~column_hints ~rows)
  
-let tabulate header columns show_header has_header filename =
-  let tabulate_lines = tabulate_lines header columns show_header has_header in 
+let read_n_lines filename n = 
+  In_channel.with_file filename ~f:(fun chan ->
+    let rec loop n = 
+      if n = 0 then
+        []
+      else 
+        match In_channel.input_line chan with
+          | Some line -> line::(loop n)
+          | None -> [] in
+    loop n)
+
+let read_n_lines_chan chan n = 
+    let rec loop n = 
+      if n = 0 then
+        []
+      else 
+        match In_channel.input_line chan with
+          | Some line -> line::(loop n)
+          | None -> [] in
+    loop n
+
+let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
+  let buffer = Buffer.init buffer_size in
+  let tabulate_lines = tabulate_lines ~header ~columns ~show_header ~has_header in 
   let print_screen_lines lines_result =
     match lines_result with 
       | Result.Ok lines ->
@@ -103,12 +162,11 @@ let tabulate header columns show_header has_header filename =
       | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
   match filename with
   | Some filename -> 
-    In_channel.with_file filename ~f:(fun chan -> 
-    let lines = In_channel.input_lines chan in
-    let screen_lines = tabulate_lines lines in
-    print_screen_lines screen_lines)
+    let lines = read_n_lines filename buffer_size in
+    let screen_lines = tabulate_lines ~lines in
+    print_screen_lines screen_lines
   | None -> 
-    let screen_lines = tabulate_lines (In_channel.input_lines In_channel.stdin) in
+    let screen_lines = tabulate_lines ~lines:(read_n_lines_chan In_channel.stdin buffer_size) in
     print_screen_lines screen_lines
   
 
@@ -123,7 +181,9 @@ let spec =
     ~doc:"LIST Column labels for csv/tsv file"
   +> flag "-columns" (optional column_names)
     ~doc:"LIST Comma separated list of column names/ids to dislplay"
-  +> flag "-hide-header" no_arg 
+  +> flag "-buffer-size" (optional_with_default 1000 int)
+    ~doc:"The number of lines the program can store at a time"
+  +> flag "-hide-header" no_arg
     ~doc:" Hide the header"
   +> flag "-no-header-row" no_arg
     ~doc:" Don't use the first row as the header row, use numeric id's instead unless -header is provided"
@@ -134,8 +194,8 @@ let command =
     ~summary: "Render input data as a table"
     ~readme:(fun () -> "Render input data as a table")
     spec
-    (fun header columns hide_header no_header_row filename () ->  tabulate header columns 
-      (not hide_header) 
-      ((not no_header_row) || Option.is_some header) filename)
+    (fun header columns buffer_size hide_header no_header_row filename () ->  tabulate ~header ~columns ~buffer_size
+      ~show_header:(not hide_header) 
+      ~has_header:((not no_header_row) || Option.is_some header) ~filename)
 
 let () = Command.run command
