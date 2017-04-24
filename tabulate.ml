@@ -17,21 +17,19 @@ type column_hint = {
 }
 
 let draw_n n ch =
-  for _ = 1 to n do
-    print_string ch
-  done
+  let chl = String.length ch in
+  let s = String.create (n * chl) in
+  for i = 0 to n - 1 do
+    String.blit ~src:ch ~src_pos:0 ~dst:s ~dst_pos:(chl*i) ~len:chl
+  done;
+  s
 
 let draw_row border cell_fn data =
   let left = border.(0) in
   let center = border.(1) in
   let right = border.(2) in
-  print_string left;
-  let rec loop = function
-    | [cell] -> cell_fn cell; loop []
-    | cell::rest -> cell_fn cell; print_string center; loop rest
-    | [] -> print_string right in
-  loop data;
-  print_string "\n"
+  let line = left ^ (String.concat ~sep:center (List.map data ~f:cell_fn)) ^ right in
+  line
 
 let string_format s n = 
   let len = String.length s in
@@ -42,7 +40,7 @@ let string_format s n =
 
 let draw_data_row column_hints row =
   let data = List.zip_exn column_hints row in
-  let cell_fn ({width; _}, text) = print_string (string_format text width) in
+  let cell_fn ({width; _}, text) = string_format text width in
   draw_row borders.(3) cell_fn data
 
 let draw_separator index column_hints =
@@ -50,13 +48,18 @@ let draw_separator index column_hints =
   draw_row index cell_fn column_hints
 
 let draw_table show_header column_hints rows =
-  draw_separator borders.(0) column_hints;
-  if show_header then begin
-    draw_data_row column_hints (List.map ~f:(fun {label; _} -> label) column_hints);
-    draw_separator borders.(1) column_hints
-  end;
-  List.iter rows ~f:(fun row -> draw_data_row column_hints row);
-  draw_separator borders.(2) column_hints
+  List.concat [
+    [draw_separator borders.(0) column_hints];
+    if show_header then
+      [
+        draw_data_row column_hints (List.map ~f:(fun {label; _} -> label) column_hints);
+        draw_separator borders.(1) column_hints
+      ]
+    else 
+      [];
+    List.map rows ~f:(fun row -> draw_data_row column_hints row);
+    [draw_separator borders.(2) column_hints]
+  ]
 
 
 let extract_header has_header header lines = 
@@ -78,28 +81,35 @@ let tabulate_lines header columns show_header has_header lines =
   let open Result.Monad_infix in
   let header_result = extract_header has_header header lines in
   let prepare_table_result = header_result >>= fun (header, lines) ->
-  let rows = List.map ~f:(fun line -> String.split ~on:'\t' line) lines in 
-  List.transpose rows |> Result.of_option ~error:"Column counts not the same for all rows" >>= fun transposed ->
-  List.zip header transposed |> Result.of_option ~error:"Header sized does not match column count" >>| fun columns -> 
-  let column_hints = List.map columns ~f:(fun (label, column) -> 
-    let width = Option.value_exn (List.max_elt (List.map ~f:String.length (label::column))
-      ~cmp:(fun a b -> a - b)) in
-    {label; width}
-  ) in
-  (column_hints, rows) in
-  match prepare_table_result with 
-    | Result.Ok (column_hints, rows) -> draw_table show_header column_hints rows
-    | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg
-
-
+    let rows = List.map ~f:(fun line -> String.split ~on:'\t' line) lines in 
+    List.transpose rows |> Result.of_option ~error:"Column counts not the same for all rows" >>= fun transposed ->
+    List.zip header transposed |> Result.of_option ~error:"Header sized does not match column count" >>| fun columns -> 
+    let column_hints = List.map columns ~f:(fun (label, column) -> 
+      let width = Option.value_exn (List.max_elt (List.map ~f:String.length (label::column))
+        ~cmp:(fun a b -> a - b)) in
+      {label; width}
+    ) in
+    (column_hints, rows) in
+  Result.map prepare_table_result ~f:(fun (column_hints, rows) ->  draw_table show_header column_hints rows)
+ 
 let tabulate header columns show_header has_header filename =
   let tabulate_lines = tabulate_lines header columns show_header has_header in 
+  let print_screen_lines lines_result =
+    match lines_result with 
+      | Result.Ok lines ->
+        List.iter lines ~f:(fun line ->
+          print_endline line
+        )
+      | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
   match filename with
   | Some filename -> 
     In_channel.with_file filename ~f:(fun chan -> 
-      let lines = In_channel.input_lines chan in
-      tabulate_lines lines)
-  | None -> tabulate_lines (In_channel.input_lines In_channel.stdin)
+    let lines = In_channel.input_lines chan in
+    let screen_lines = tabulate_lines lines in
+    print_screen_lines screen_lines)
+  | None -> 
+    let screen_lines = tabulate_lines (In_channel.input_lines In_channel.stdin) in
+    print_screen_lines screen_lines
   
 
 let column_names =
