@@ -37,6 +37,11 @@ module Console = struct
 
   let print_line line = 
     print_endline line
+
+  let print_string line = 
+    print_string line;
+    Out_channel.flush Out_channel.stdout
+
 end
 
 module Buffer = struct
@@ -158,11 +163,10 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
   let csv_channel ~chan = Csv_util.csv_channel ~csv_header ~csv_has_header ~csv_separator ~chan in
   let buffer = Buffer.init buffer_size in
   let tabulate_lines = tabulate_lines ~show_header in 
-  let render lines = 
-    List.iter lines ~f:(fun line ->
-      Console.print_line line
-    )
-     in
+  let rec render = function
+    | line :: [] -> Console.print_string line
+    | line :: rest -> Console.print_line line; render rest
+    | [] -> () in
   let tabulate_chan chan = 
     let header_result = Csv_util.extract_header ~chan in
     let screen_lines = Result.bind header_result (fun (header, first_line) ->
@@ -187,8 +191,8 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
           | None -> Option.iter (Csv_util.read_line chan) ~f:(Buffer.add buffer);
         let count = min row_count (Buffer.length buffer) in
         let screen_lines = tabulate_lines ~header ~buffer ~count in
-        let rec loop screen_lines =
-          let screen_lines_count = min (List.length screen_lines) (row_count - 1) in
+        let rec loop screen_lines = 
+          let screen_lines_count = min (List.length screen_lines) row_count in
           let screen_lines_trunc = List.slice screen_lines 0 screen_lines_count in
           render screen_lines_trunc; 
           Option.iter (Csv_util.read_line chan) ~f:(fun line ->
@@ -197,7 +201,7 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
             let updated_screen_lines = tabulate_lines ~header ~buffer ~count in
             match updated_screen_lines with
             | Result.Ok lines -> 
-                Console.move_cursor_to (row_count - screen_lines_count) 0;
+                Console.move_cursor_to (row_count - screen_lines_count + 1) 0;
                 loop lines
             | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg) in
         match screen_lines with

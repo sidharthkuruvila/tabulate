@@ -1,4 +1,4 @@
-true: package(core,async,terminal_size,csv)
+true: package(core,terminal_size,csv)
 true: thread
 <tabulate.ml>: include
 
