@@ -1,5 +1,16 @@
 open Core.Std
 
+module File_types = struct
+  type file_type = 
+    | CSV
+    | TSV
+
+  let from_string = function
+    | "csv" -> Some CSV
+    | "tsv" -> Some TSV
+    | _ -> None
+    
+end
 
 module Buffer = struct
   type buffer = {
@@ -33,6 +44,7 @@ module Buffer = struct
     buffer.buffer.((next - idx - 1) % len)
 
 end
+
 
 let borders = [| 
   [|"┏";"┳";"┓"|]; 
@@ -93,21 +105,23 @@ let draw_table ~show_header ~column_hints ~rows =
     [draw_separator borders.(2) column_hints]
   ]
 
-let read_line chan =
-  Option.map (In_channel.input_line chan) ~f:(String.split ~on:'\t')
+let read_line chan = 
+  try
+    Some (Csv.next chan)
+  with End_of_file -> None
+  | _ -> failwith "Unknown"
  
 let extract_header ~has_header ~header ~chan = 
-  match header with 
-    | Some header -> Result.Ok (header, None)
-    | None -> match read_line chan with
-      | Some header_labels -> 
-        if has_header then 
-          Result.Ok (header_labels, None) 
-        else 
+  let header = Csv.Rows.header chan in
+  if header = [] then
+    match read_line chan with
+    | Some header_labels ->
           let column_id_ints = List.range 0 (List.length header_labels) in
           let column_ids = List.map column_id_ints ~f:(fun n -> "column_" ^ (string_of_int n)) in
           Result.Ok (column_ids, Some header_labels)
       | None -> Result.Error "Unable to parse header row"
+  else
+    Result.Ok (header, None)
 
 let tabulate_lines  ~columns ~show_header ~has_header ~header ~buffer ~count= 
   let open Result.Monad_infix in
@@ -131,7 +145,9 @@ let read_n_lines buffer chan n =
         | None -> () in
   loop n
 
-let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
+let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~format ~filename =
+  let csv_channel ~chan = 
+    Csv.of_channel ?header ~has_header ~separator:'\t' chan in
   let buffer = Buffer.init buffer_size in
   let tabulate_lines = tabulate_lines ~columns ~show_header ~has_header in 
   let render lines = 
@@ -149,9 +165,9 @@ let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
     | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
   match filename with
   | Some filename -> 
-    In_channel.with_file filename ~f:tabulate_chan
+    In_channel.with_file filename ~f:(fun chan -> tabulate_chan (csv_channel ~chan))
   | None -> 
-    let chan = In_channel.stdin in
+    let chan = csv_channel In_channel.stdin in
     let col_count = Terminal_size.get_columns () in
     let row_count = Terminal_size.get_rows () in
     if Option.is_none col_count || Option.is_none row_count then
@@ -186,6 +202,10 @@ let column_names =
   Command.Spec.Arg_type.create
       (fun str -> String.split ~on:',' str)  
 
+let file_type =
+  Command.Spec.Arg_type.create
+      (fun str -> Option.value_exn (File_types.from_string str))
+
 let spec =
   let open Command.Spec in
   empty
@@ -199,6 +219,8 @@ let spec =
     ~doc:" Hide the header"
   +> flag "-no-header-row" no_arg
     ~doc:" Don't use the first row as the header row, use numeric id's instead unless -header is provided"
+  +> flag "-format" (optional_with_default File_types.TSV file_type)
+    ~doc: "The file format of the input file, defaults to tsv"
   +> anon (maybe ("filename" %: string))
 
 let command =
@@ -206,8 +228,8 @@ let command =
     ~summary: "Render input data as a table"
     ~readme:(fun () -> "Render input data as a table")
     spec
-    (fun header columns buffer_size hide_header no_header_row filename () ->  tabulate ~header ~columns ~buffer_size
+    (fun header columns buffer_size hide_header no_header_row format filename () ->  tabulate ~header ~columns ~buffer_size
       ~show_header:(not hide_header) 
-      ~has_header:((not no_header_row) || Option.is_some header) ~filename)
+      ~has_header:((not no_header_row) || Option.is_some header) ~format ~filename)
 
 let () = Command.run command
