@@ -28,6 +28,11 @@ end
 
 
 module Console = struct
+  let get_terminal_size _ =
+    let col_count = Terminal_size.get_columns () in
+    let row_count = Terminal_size.get_rows () in
+    Option.both row_count col_count
+
   let move_cursor_to row col = 
     Printf.printf "\x1B[%d;%df" row col;
 end
@@ -169,13 +174,11 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
     In_channel.with_file filename ~f:(fun chan -> tabulate_chan (csv_channel ~chan))
   | None -> 
     let chan = csv_channel ~chan:In_channel.stdin in
-    let col_count = Terminal_size.get_columns () in
-    let row_count = Terminal_size.get_rows () in
-    if Option.is_none col_count || Option.is_none row_count then
+    let terminal_size = Console.get_terminal_size () in
+    if Option.is_none terminal_size then
       tabulate_chan chan
     else
-      let row_count = Option.value_exn row_count in
-      (*let col_count = Option.value_exn col_count in*)
+      let (row_count, _) = Option.value_exn terminal_size in
       let header_result = Csv_util.extract_header ~chan in
       Result.iter header_result ~f:(fun (header, first_line) ->
         match first_line with
