@@ -194,7 +194,7 @@ let spec =
   +> flag "-columns" (optional column_names)
     ~doc:"LIST Comma separated list of column names/ids to dislplay"
   +> flag "-buffer-size" (optional_with_default 1000 int)
-    ~doc:"The number of lines the program can store at a time"
+    ~doc:"INT The number of lines the program can store at a time"
   +> flag "-hide-header" no_arg
     ~doc:" Hide the header"
   +> flag "-no-header-row" no_arg
