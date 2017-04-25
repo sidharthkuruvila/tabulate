@@ -34,7 +34,10 @@ module Console = struct
     Option.both row_count col_count
 
   let move_cursor_to row col = 
-    Printf.printf "\x1B[%d;%df" row col;
+    Printf.printf "\x1B[%d;%df" row col
+
+  let print_line line = 
+    print_endline line
 end
 
 module Buffer = struct
@@ -158,8 +161,9 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
   let tabulate_lines = tabulate_lines ~show_header in 
   let render lines = 
     List.iter lines ~f:(fun line ->
-      print_endline line
-    ) in
+      Console.print_line line
+    )
+     in
   let tabulate_chan chan = 
     let header_result = Csv_util.extract_header ~chan in
     let screen_lines = Result.bind header_result (fun (header, first_line) ->
