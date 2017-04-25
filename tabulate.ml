@@ -1,5 +1,37 @@
 open Core.Std
 
+
+module Csv_util = struct
+
+  let csv_channel ~csv_header ~csv_has_header ~csv_separator ~chan = 
+      Csv.of_channel ?header:csv_header ~has_header:csv_has_header ~separator:csv_separator chan
+
+  let read_line chan = 
+    try
+      Some (Csv.next chan)
+    with End_of_file -> None
+    | _ -> failwith "Unknown"
+   
+  let extract_header ~chan = 
+    let header = Csv.Rows.header chan in
+    if header = [] then
+      match read_line chan with
+      | Some header_labels ->
+            let column_id_ints = List.range 0 (List.length header_labels) in
+            let column_ids = List.map column_id_ints ~f:(fun n -> "column_" ^ (string_of_int n)) in
+            Result.Ok (column_ids, Some header_labels)
+        | None -> Result.Error "Unable to parse header row"
+    else
+      Result.Ok (header, None)
+
+end
+
+
+module Console = struct
+  let move_cursor_to row col = 
+    Printf.printf "\x1B[%d;%df" row col;
+end
+
 module Buffer = struct
   type buffer = {
     buffer: string list array;
@@ -93,24 +125,6 @@ let draw_table ~show_header ~column_hints ~rows =
     [draw_separator borders.(2) column_hints]
   ]
 
-let read_line chan = 
-  try
-    Some (Csv.next chan)
-  with End_of_file -> None
-  | _ -> failwith "Unknown"
- 
-let extract_header ~chan = 
-  let header = Csv.Rows.header chan in
-  if header = [] then
-    match read_line chan with
-    | Some header_labels ->
-          let column_id_ints = List.range 0 (List.length header_labels) in
-          let column_ids = List.map column_id_ints ~f:(fun n -> "column_" ^ (string_of_int n)) in
-          Result.Ok (column_ids, Some header_labels)
-      | None -> Result.Error "Unable to parse header row"
-  else
-    Result.Ok (header, None)
-
 let tabulate_lines ~show_header ~header ~buffer ~count= 
   let open Result.Monad_infix in
   let rows = List.init count ~f:(Buffer.get buffer) in 
@@ -128,14 +142,13 @@ let tabulate_lines ~show_header ~header ~buffer ~count=
 let read_n_lines buffer chan n =
   let rec loop n = 
     if n > 0 then
-      match read_line chan with
+      match Csv_util.read_line chan with
         | Some line -> Buffer.add buffer line; loop n
         | None -> () in
   loop n
 
 let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separator ~filename =
-  let csv_channel ~chan = 
-    Csv.of_channel ?header:csv_header ~has_header:csv_has_header ~separator:csv_separator chan in
+  let csv_channel ~chan = Csv_util.csv_channel ~csv_header ~csv_has_header ~csv_separator ~chan in
   let buffer = Buffer.init buffer_size in
   let tabulate_lines = tabulate_lines ~show_header in 
   let render lines = 
@@ -143,7 +156,7 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
       print_endline line
     ) in
   let tabulate_chan chan = 
-    let header_result = extract_header ~chan in
+    let header_result = Csv_util.extract_header ~chan in
     let screen_lines = Result.bind header_result (fun (header, first_line) ->
       Option.iter first_line ~f:(Buffer.add buffer);
       read_n_lines buffer chan buffer_size;
@@ -163,22 +176,22 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
     else
       let row_count = Option.value_exn row_count in
       (*let col_count = Option.value_exn col_count in*)
-      let header_result = extract_header ~chan in
+      let header_result = Csv_util.extract_header ~chan in
       Result.iter header_result ~f:(fun (header, first_line) ->
         match first_line with
           | Some first_line -> Buffer.add buffer first_line
-          | None -> Option.iter (read_line chan) ~f:(Buffer.add buffer);
+          | None -> Option.iter (Csv_util.read_line chan) ~f:(Buffer.add buffer);
         let count = min row_count (Buffer.length buffer) in
         let screen_lines = tabulate_lines ~header ~buffer ~count in
         let rec loop screen_lines =
           let screen_lines_count = List.length screen_lines in
-          Option.iter (read_line chan) ~f:(fun line ->
+          Option.iter (Csv_util.read_line chan) ~f:(fun line ->
             Buffer.add buffer line;
             let count = min row_count (Buffer.length buffer) in
             let updated_screen_lines = tabulate_lines ~header ~buffer ~count in
             match updated_screen_lines with
             | Result.Ok lines -> 
-                Printf.printf "\x1B[%d;0f" (row_count - screen_lines_count);
+                Console.move_cursor_to (row_count - screen_lines_count) 0;
                 render lines; 
                 loop lines
             | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg) in
