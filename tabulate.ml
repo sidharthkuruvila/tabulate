@@ -1,17 +1,5 @@
 open Core.Std
 
-module File_types = struct
-  type file_type = 
-    | CSV
-    | TSV
-
-  let from_string = function
-    | "csv" -> Some CSV
-    | "tsv" -> Some TSV
-    | _ -> None
-    
-end
-
 module Buffer = struct
   type buffer = {
     buffer: string list array;
@@ -111,7 +99,7 @@ let read_line chan =
   with End_of_file -> None
   | _ -> failwith "Unknown"
  
-let extract_header ~has_header ~header ~chan = 
+let extract_header ~chan = 
   let header = Csv.Rows.header chan in
   if header = [] then
     match read_line chan with
@@ -123,7 +111,7 @@ let extract_header ~has_header ~header ~chan =
   else
     Result.Ok (header, None)
 
-let tabulate_lines  ~columns ~show_header ~has_header ~header ~buffer ~count= 
+let tabulate_lines ~show_header ~header ~buffer ~count= 
   let open Result.Monad_infix in
   let rows = List.init count ~f:(Buffer.get buffer) in 
   let prepare_table_result = 
@@ -145,17 +133,17 @@ let read_n_lines buffer chan n =
         | None -> () in
   loop n
 
-let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~format ~filename =
+let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separator ~filename =
   let csv_channel ~chan = 
-    Csv.of_channel ?header ~has_header ~separator:'\t' chan in
+    Csv.of_channel ?header:csv_header ~has_header:csv_has_header ~separator:csv_separator chan in
   let buffer = Buffer.init buffer_size in
-  let tabulate_lines = tabulate_lines ~columns ~show_header ~has_header in 
+  let tabulate_lines = tabulate_lines ~show_header in 
   let render lines = 
     List.iter lines ~f:(fun line ->
       print_endline line
     ) in
   let tabulate_chan chan = 
-    let header_result = extract_header ~has_header ~header ~chan in
+    let header_result = extract_header ~chan in
     let screen_lines = Result.bind header_result (fun (header, first_line) ->
       Option.iter first_line ~f:(Buffer.add buffer);
       read_n_lines buffer chan buffer_size;
@@ -167,15 +155,15 @@ let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~format ~fil
   | Some filename -> 
     In_channel.with_file filename ~f:(fun chan -> tabulate_chan (csv_channel ~chan))
   | None -> 
-    let chan = csv_channel In_channel.stdin in
+    let chan = csv_channel ~chan:In_channel.stdin in
     let col_count = Terminal_size.get_columns () in
     let row_count = Terminal_size.get_rows () in
     if Option.is_none col_count || Option.is_none row_count then
       tabulate_chan chan
     else
       let row_count = Option.value_exn row_count in
-      let col_count = Option.value_exn col_count in
-      let header_result = extract_header ~has_header ~header ~chan in
+      (*let col_count = Option.value_exn col_count in*)
+      let header_result = extract_header ~chan in
       Result.iter header_result ~f:(fun (header, first_line) ->
         match first_line with
           | Some first_line -> Buffer.add buffer first_line
@@ -202,25 +190,21 @@ let column_names =
   Command.Spec.Arg_type.create
       (fun str -> String.split ~on:',' str)  
 
-let file_type =
-  Command.Spec.Arg_type.create
-      (fun str -> Option.value_exn (File_types.from_string str))
-
 let spec =
   let open Command.Spec in
   empty
-  +> flag "-header" (optional column_names)
-    ~doc:"LIST Column labels for csv/tsv file"
-  +> flag "-columns" (optional column_names)
-    ~doc:"LIST Comma separated list of column names/ids to dislplay"
+  (*+> flag "-columns" (optional column_names)
+    ~doc:"LIST Comma separated list of column names/ids to dislplay"*)
   +> flag "-buffer-size" (optional_with_default 1000 int)
     ~doc:"INT The number of lines the program can store at a time"
   +> flag "-hide-header" no_arg
     ~doc:" Hide the header"
-  +> flag "-no-header-row" no_arg
+  +> flag "-csv-no-header-row" no_arg
     ~doc:" Don't use the first row as the header row, use numeric id's instead unless -header is provided"
-  +> flag "-format" (optional_with_default File_types.TSV file_type)
-    ~doc: "The file format of the input file, defaults to tsv"
+  +> flag "-csv-header" (optional column_names)
+    ~doc:"LIST Column labels for csv/tsv file"
+  +> flag "-csv-separator" (optional_with_default '\t' char)
+    ~doc:" The column separater used by the csv parser, this defaults to the tab character"
   +> anon (maybe ("filename" %: string))
 
 let command =
@@ -228,8 +212,9 @@ let command =
     ~summary: "Render input data as a table"
     ~readme:(fun () -> "Render input data as a table")
     spec
-    (fun header columns buffer_size hide_header no_header_row format filename () ->  tabulate ~header ~columns ~buffer_size
+    (fun buffer_size hide_header no_header_row csv_header csv_separator filename () ->  tabulate ~buffer_size
       ~show_header:(not hide_header) 
-      ~has_header:((not no_header_row) || Option.is_some header) ~format ~filename)
+      ~csv_has_header:((not no_header_row) || Option.is_some csv_header) 
+      ~csv_header ~csv_separator ~filename)
 
 let () = Command.run command
