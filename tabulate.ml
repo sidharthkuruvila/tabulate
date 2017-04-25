@@ -23,7 +23,6 @@ module Csv_util = struct
         | None -> Result.Error "Unable to parse header row"
     else
       Result.Ok (header, None)
-
 end
 
 
