@@ -174,11 +174,9 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
     In_channel.with_file filename ~f:(fun chan -> tabulate_chan (csv_channel ~chan))
   | None -> 
     let chan = csv_channel ~chan:In_channel.stdin in
-    let terminal_size = Console.get_terminal_size () in
-    if Option.is_none terminal_size then
-      tabulate_chan chan
-    else
-      let (row_count, _) = Option.value_exn terminal_size in
+    match Console.get_terminal_size () with
+    | None -> tabulate_chan chan
+    | Some (row_count, _) ->
       let header_result = Csv_util.extract_header ~chan in
       Result.iter header_result ~f:(fun (header, first_line) ->
         match first_line with
@@ -187,7 +185,9 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
         let count = min row_count (Buffer.length buffer) in
         let screen_lines = tabulate_lines ~header ~buffer ~count in
         let rec loop screen_lines =
-          let screen_lines_count = List.length screen_lines in
+          let screen_lines_count = min (List.length screen_lines) (row_count - 1) in
+          let screen_lines_trunc = List.slice screen_lines 0 screen_lines_count in
+          render screen_lines_trunc; 
           Option.iter (Csv_util.read_line chan) ~f:(fun line ->
             Buffer.add buffer line;
             let count = min row_count (Buffer.length buffer) in
@@ -195,11 +195,10 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
             match updated_screen_lines with
             | Result.Ok lines -> 
                 Console.move_cursor_to (row_count - screen_lines_count) 0;
-                render lines; 
                 loop lines
             | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg) in
         match screen_lines with
-        | Result.Ok lines -> render lines; loop lines
+        | Result.Ok lines -> loop lines
         | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg)
 
 let column_names =
