@@ -3,14 +3,14 @@ open Core.Std
 
 module Buffer = struct
   type buffer = {
-    buffer: string array;
+    buffer: string list array;
     mutable next: int;
     mutable last: int;
   }
 
   let init size = 
     {
-      buffer = Array.create ~len:(size+1) "";
+      buffer = Array.create ~len:(size+1) [];
       next = 0;
       last = 0
     }
@@ -22,7 +22,6 @@ module Buffer = struct
     end;
     buffer.buffer.(buffer.next) <- s;
     buffer.next <- (buffer.next + 1) % len
-    
 
   let length buffer =
     (buffer.next - buffer.last) % (Array.length buffer.buffer)
@@ -43,8 +42,6 @@ let borders = [|
 |]
 
 let hline = "━"
-let vline = "┃"
-
 
 type column_hint = {
   label: string;
@@ -96,27 +93,25 @@ let draw_table ~show_header ~column_hints ~rows =
     [draw_separator borders.(2) column_hints]
   ]
 
-
+let read_line chan =
+  Option.map (In_channel.input_line chan) ~f:(String.split ~on:'\t')
+ 
 let extract_header ~has_header ~header ~chan = 
   match header with 
     | Some header -> Result.Ok (header, None)
-    | None -> match In_channel.input_line chan with
-      | Some header ->  
-        let header_labels = String.split ~on:'\t' header in
+    | None -> match read_line chan with
+      | Some header_labels -> 
         if has_header then 
           Result.Ok (header_labels, None) 
         else 
           let column_id_ints = List.range 0 (List.length header_labels) in
           let column_ids = List.map column_id_ints ~f:(fun n -> "column_" ^ (string_of_int n)) in
-          Result.Ok (column_ids, Some header)
+          Result.Ok (column_ids, Some header_labels)
       | None -> Result.Error "Unable to parse header row"
-
 
 let tabulate_lines  ~columns ~show_header ~has_header ~header ~buffer ~count= 
   let open Result.Monad_infix in
-  let rows = List.init count ~f:(fun n -> 
-    let line = Buffer.get buffer n in
-    String.split ~on:'\t' line) in 
+  let rows = List.init count ~f:(Buffer.get buffer) in 
   let prepare_table_result = 
     List.transpose rows |> Result.of_option ~error:"Column counts not the same for all rows" >>= fun transposed ->
     List.zip header transposed |> Result.of_option ~error:"Header size does not match column count" >>| fun columns -> 
@@ -127,11 +122,11 @@ let tabulate_lines  ~columns ~show_header ~has_header ~header ~buffer ~count=
     ) in
     (column_hints, rows) in
   Result.map prepare_table_result ~f:(fun (column_hints, rows) ->  draw_table ~show_header ~column_hints ~rows)
- 
+
 let read_n_lines buffer chan n =
   let rec loop n = 
     if n > 0 then
-      match In_channel.input_line chan with
+      match read_line chan with
         | Some line -> Buffer.add buffer line; loop n
         | None -> () in
   loop n
@@ -168,12 +163,12 @@ let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
       Result.iter header_result ~f:(fun (header, first_line) ->
         match first_line with
           | Some first_line -> Buffer.add buffer first_line
-          | None -> Option.iter (In_channel.input_line chan) ~f:(Buffer.add buffer);
+          | None -> Option.iter (read_line chan) ~f:(Buffer.add buffer);
         let count = min row_count (Buffer.length buffer) in
         let screen_lines = tabulate_lines ~header ~buffer ~count in
         let rec loop screen_lines =
           let screen_lines_count = List.length screen_lines in
-          Option.iter (In_channel.input_line chan) ~f:(fun line ->
+          Option.iter (read_line chan) ~f:(fun line ->
             Buffer.add buffer line;
             let count = min row_count (Buffer.length buffer) in
             let updated_screen_lines = tabulate_lines ~header ~buffer ~count in
@@ -186,8 +181,6 @@ let tabulate ~header ~columns ~buffer_size ~show_header ~has_header ~filename =
         match screen_lines with
         | Result.Ok lines -> render lines; loop lines
         | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg)
-      (* print_string (Printf.sprintf "To implement: cols = %d rows = %d\n" col_count row_count)  *)
-    
 
 let column_names =
   Command.Spec.Arg_type.create
