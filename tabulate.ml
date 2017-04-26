@@ -180,30 +180,30 @@ let read_n_lines buffer chan n =
 
 let tabulate_loop ~chan ~show_header ~row_count ~buffer =
   let mk_screen_lines ~row_count ~header ~buffer = 
-        let count = min row_count (Buffer.length buffer) in
-        let table_hints = Table_hints.caclulate ~header ~buffer ~count in
-        tabulate_lines  ~show_header ~table_hints ~buffer ~count in
-      let header_result = Csv_util.extract_header ~chan in
-      Result.iter header_result ~f:(fun (header, first_line) ->
-        match first_line with
-          | Some first_line -> Buffer.add buffer first_line
-          | None -> Option.iter (Csv_util.read_line chan) ~f:(Buffer.add buffer);
-        let screen_lines = mk_screen_lines ~row_count ~header ~buffer in
-        let rec loop screen_lines = 
-          let screen_lines_count = min (List.length screen_lines) row_count in
-          let screen_lines_trunc = List.slice screen_lines 0 screen_lines_count in
-          Console.render screen_lines_trunc; 
-          Option.iter (Csv_util.read_line chan) ~f:(fun line ->
-            Buffer.add buffer line;
-            let updated_screen_lines = mk_screen_lines ~row_count ~header ~buffer in
-            match updated_screen_lines with
-            | Result.Ok lines -> 
-                Console.move_cursor_to (row_count - screen_lines_count + 1) 0;
-                loop lines
-            | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg) in
-        match screen_lines with
-        | Result.Ok lines -> loop lines
-        | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg)
+    let count = min row_count (Buffer.length buffer) in
+    let table_hints = Table_hints.caclulate ~header ~buffer ~count in
+    tabulate_lines  ~show_header ~table_hints ~buffer ~count in
+  let header_result = Csv_util.extract_header ~chan in
+  Result.iter header_result ~f:(fun (header, first_line) ->
+    match first_line with
+      | Some first_line -> Buffer.add buffer first_line
+      | None -> Option.iter (Csv_util.read_line chan) ~f:(Buffer.add buffer);
+    let screen_lines = mk_screen_lines ~row_count ~header ~buffer in
+    let rec loop screen_lines = 
+      let screen_lines_count = min (List.length screen_lines) row_count in
+      let screen_lines_trunc = List.slice screen_lines 0 screen_lines_count in
+      Console.render screen_lines_trunc; 
+      Option.iter (Csv_util.read_line chan) ~f:(fun line ->
+        Buffer.add buffer line;
+        let updated_screen_lines = mk_screen_lines ~row_count ~header ~buffer in
+        match updated_screen_lines with
+        | Result.Ok lines -> 
+            Console.move_cursor_to (row_count - screen_lines_count + 1) 0;
+            loop lines
+        | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg) in
+    match screen_lines with
+    | Result.Ok lines -> loop lines
+    | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg)
 
 let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separator ~filename =
   let csv_channel ~chan = Csv_util.csv_channel ~csv_header ~csv_has_header ~csv_separator ~chan in
