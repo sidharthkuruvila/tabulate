@@ -42,6 +42,10 @@ module Console = struct
     print_string line;
     Out_channel.flush Out_channel.stdout
 
+  let rec render = function
+    | line :: [] -> print_string line
+    | line :: rest -> print_line line; render rest
+    | [] -> ()
 end
 
 module Buffer = struct
@@ -160,10 +164,10 @@ let draw_table ~show_header ~column_hints ~rows =
     [draw_separator borders.(2) column_hints]
   ]
 
-let tabulate_lines ~show_header ~header ~buffer ~count= 
+let tabulate_lines ~table_hints ~show_header ~buffer ~count= 
   let open Result.Monad_infix in
   let rows = List.init count ~f:(Buffer.get buffer) in 
-  Table_hints.caclulate ~header ~buffer ~count >>| fun column_hints ->  
+  table_hints >>| fun column_hints ->  
   draw_table ~show_header ~column_hints ~rows
 
 let read_n_lines buffer chan n =
@@ -174,46 +178,24 @@ let read_n_lines buffer chan n =
         | None -> () in
   loop n
 
-let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separator ~filename =
-  let csv_channel ~chan = Csv_util.csv_channel ~csv_header ~csv_has_header ~csv_separator ~chan in
-  let buffer = Buffer.init buffer_size in
-  let tabulate_lines = tabulate_lines ~show_header in 
-  let rec render = function
-    | line :: [] -> Console.print_string line
-    | line :: rest -> Console.print_line line; render rest
-    | [] -> () in
-  let tabulate_chan chan = 
-    let header_result = Csv_util.extract_header ~chan in
-    let screen_lines = Result.bind header_result (fun (header, first_line) ->
-      Option.iter first_line ~f:(Buffer.add buffer);
-      read_n_lines buffer chan buffer_size;
-      tabulate_lines ~header ~buffer ~count:(Buffer.length buffer)) in
-    match screen_lines with
-    | Result.Ok lines -> render lines
-    | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
-  match filename with
-  | Some filename -> 
-    In_channel.with_file filename ~f:(fun chan -> tabulate_chan (csv_channel ~chan))
-  | None -> 
-    let chan = csv_channel ~chan:In_channel.stdin in
-    match Console.get_terminal_size () with
-    | None -> tabulate_chan chan
-    | Some (row_count, _) ->
+let tabulate_loop ~chan ~show_header ~row_count ~buffer =
+  let mk_screen_lines ~row_count ~header ~buffer = 
+        let count = min row_count (Buffer.length buffer) in
+        let table_hints = Table_hints.caclulate ~header ~buffer ~count in
+        tabulate_lines  ~show_header ~table_hints ~buffer ~count in
       let header_result = Csv_util.extract_header ~chan in
       Result.iter header_result ~f:(fun (header, first_line) ->
         match first_line with
           | Some first_line -> Buffer.add buffer first_line
           | None -> Option.iter (Csv_util.read_line chan) ~f:(Buffer.add buffer);
-        let count = min row_count (Buffer.length buffer) in
-        let screen_lines = tabulate_lines ~header ~buffer ~count in
+        let screen_lines = mk_screen_lines ~row_count ~header ~buffer in
         let rec loop screen_lines = 
           let screen_lines_count = min (List.length screen_lines) row_count in
           let screen_lines_trunc = List.slice screen_lines 0 screen_lines_count in
-          render screen_lines_trunc; 
+          Console.render screen_lines_trunc; 
           Option.iter (Csv_util.read_line chan) ~f:(fun line ->
             Buffer.add buffer line;
-            let count = min row_count (Buffer.length buffer) in
-            let updated_screen_lines = tabulate_lines ~header ~buffer ~count in
+            let updated_screen_lines = mk_screen_lines ~row_count ~header ~buffer in
             match updated_screen_lines with
             | Result.Ok lines -> 
                 Console.move_cursor_to (row_count - screen_lines_count + 1) 0;
@@ -222,6 +204,32 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
         match screen_lines with
         | Result.Ok lines -> loop lines
         | Result.Error msg -> Printf.printf "Failed to generate table: %s\n" msg)
+
+let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separator ~filename =
+  let csv_channel ~chan = Csv_util.csv_channel ~csv_header ~csv_has_header ~csv_separator ~chan in
+  let buffer = Buffer.init buffer_size in
+  let tabulate_lines = tabulate_lines ~show_header in 
+  
+  let tabulate_chan chan = 
+    let header_result = Csv_util.extract_header ~chan in
+    let screen_lines = Result.bind header_result (fun (header, first_line) ->
+      Option.iter first_line ~f:(Buffer.add buffer);
+      read_n_lines buffer chan buffer_size;
+      let count = Buffer.length buffer in
+      let table_hints = Table_hints.caclulate ~header ~buffer ~count in
+      tabulate_lines ~table_hints ~buffer ~count) in
+    match screen_lines with
+    | Result.Ok lines -> Console.render lines
+    | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
+  match filename with
+  | Some filename -> 
+    In_channel.with_file filename ~f:(fun chan -> tabulate_chan (csv_channel ~chan))
+  | None -> 
+    let chan = csv_channel ~chan:In_channel.stdin in
+    match Console.get_terminal_size () with
+    | None -> tabulate_chan chan
+    | Some (row_count, _) -> 
+      tabulate_loop ~chan ~show_header ~row_count ~buffer
 
 let column_names =
   Command.Spec.Arg_type.create
