@@ -46,6 +46,9 @@ module Console = struct
     | line :: [] -> print_string line
     | line :: rest -> print_line line; render rest
     | [] -> ()
+
+  let clear_scren_below_cursor _ = 
+    Printf.printf "\x1B[J"  
 end
 
 module Buffer = struct
@@ -82,16 +85,6 @@ module Buffer = struct
 end
 
 
-let borders = [| 
-  [|"┏";"┳";"┓"|]; 
-  [|"┣";"╋";"┫"|]; 
-  [|"┗";"┻";"┛"|];
-  [|"┃";"┃";"┃"|]
-|]
-
-let hline = "━"
-
-
 
 module Table_hints = struct
 
@@ -118,6 +111,17 @@ module Table_hints = struct
     column_hints
 
 end
+
+let borders = [| 
+  [|"┏";"┳";"┓"|]; 
+  [|"┣";"╋";"┫"|]; 
+  [|"┗";"┻";"┛"|];
+  [|"┃";"┃";"┃"|]
+|]
+
+let hline = "━"
+
+
 
 let draw_n n ch =
   let chl = String.length ch in
@@ -180,10 +184,6 @@ let read_n_lines buffer chan n =
 
 let tabulate_loop ~chan ~show_header ~row_count ~buffer =
   let open Result.Monad_infix in
-  let mk_screen_lines ~row_count ~header ~buffer = 
-    let count = min row_count (Buffer.length buffer) in
-    let table_hints = Table_hints.caclulate ~header ~buffer ~count in
-    tabulate_lines  ~show_header ~table_hints ~buffer ~count in
   let header_result = Csv_util.extract_header ~chan in
   let add_first_line first_line = 
     match first_line with
@@ -191,7 +191,12 @@ let tabulate_loop ~chan ~show_header ~row_count ~buffer =
       | None -> Option.iter (Csv_util.read_line chan) ~f:(Buffer.add buffer) in
   header_result >>= fun (header, first_line) -> 
   add_first_line first_line;
-  let rec loop screen_lines = 
+  let rec loop screen_lines_count = 
+    Console.move_cursor_to (row_count - screen_lines_count + 1) 0;
+    Console.clear_scren_below_cursor ();
+    let count = min row_count (Buffer.length buffer) in
+    let table_hints = Table_hints.caclulate ~header ~buffer ~count in
+    tabulate_lines  ~show_header ~table_hints ~buffer ~count >>= fun screen_lines ->
     let screen_lines_count = min (List.length screen_lines) row_count in
     let screen_lines_trunc = List.slice screen_lines 0 screen_lines_count in
     Console.render screen_lines_trunc;
@@ -199,16 +204,12 @@ let tabulate_loop ~chan ~show_header ~row_count ~buffer =
     | None -> Result.Ok ()
     | Some line -> 
       Buffer.add buffer line;
-      mk_screen_lines ~row_count ~header ~buffer >>= fun lines -> 
-      Console.move_cursor_to (row_count - screen_lines_count + 1) 0;
-      loop lines in
-  mk_screen_lines ~row_count ~header ~buffer >>= loop
+      loop screen_lines_count in
+  loop 0
 
 let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separator ~filename =
   let csv_channel ~chan = Csv_util.csv_channel ~csv_header ~csv_has_header ~csv_separator ~chan in
-  let buffer = Buffer.init buffer_size in
-  let tabulate_lines = tabulate_lines ~show_header in 
-  
+  let buffer = Buffer.init buffer_size in 
   let tabulate_chan chan = 
     let header_result = Csv_util.extract_header ~chan in
     let screen_lines = Result.bind header_result (fun (header, first_line) ->
@@ -216,7 +217,7 @@ let tabulate ~buffer_size ~show_header ~csv_has_header ~csv_header ~csv_separato
       read_n_lines buffer chan buffer_size;
       let count = Buffer.length buffer in
       let table_hints = Table_hints.caclulate ~header ~buffer ~count in
-      tabulate_lines ~table_hints ~buffer ~count) in
+      tabulate_lines ~show_header ~table_hints ~buffer ~count) in
     match screen_lines with
     | Result.Ok lines -> Console.render lines
     | Result.Error msg -> Printf.eprintf "Failed to generate table: %s\n" msg in
