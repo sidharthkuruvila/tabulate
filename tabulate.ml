@@ -87,10 +87,33 @@ let borders = [|
 
 let hline = "━"
 
-type column_hint = {
-  label: string;
-  width: int;
-}
+
+
+module Table_hints = struct
+
+  type column_hint = {
+    label: string;
+    header_width: int;
+    data_width: int;
+    width: int
+
+  }
+
+  let caclulate ~header ~buffer ~count = 
+    let open Result.Monad_infix in
+    let rows = List.init count ~f:(Buffer.get buffer) in 
+    List.transpose rows |> Result.of_option ~error:"Column counts not the same for all rows" >>= fun transposed ->
+    List.zip header transposed |> Result.of_option ~error:"Header size does not match column count" >>| fun columns -> 
+    let column_hints = List.map columns ~f:(fun (label, column) ->
+      let header_width = String.length label in 
+      let data_width = Option.value_exn (List.max_elt (List.map ~f:String.length (column))
+        ~cmp:(fun a b -> a - b)) in
+      let width = max header_width data_width in
+      {label; width; header_width; data_width}
+    ) in
+    column_hints
+
+end
 
 let draw_n n ch =
   let chl = String.length ch in
@@ -116,11 +139,11 @@ let string_format s n =
 
 let draw_data_row column_hints row =
   let data = List.zip_exn column_hints row in
-  let cell_fn ({width; _}, text) = string_format text width in
+  let cell_fn ({Table_hints.width; _}, text) = string_format text width in
   draw_row borders.(3) cell_fn data
 
 let draw_separator index column_hints =
-  let cell_fn {width; _} = draw_n width hline in
+  let cell_fn {Table_hints.width; _} = draw_n width hline in
   draw_row index cell_fn column_hints
 
 let draw_table ~show_header ~column_hints ~rows =
@@ -140,16 +163,8 @@ let draw_table ~show_header ~column_hints ~rows =
 let tabulate_lines ~show_header ~header ~buffer ~count= 
   let open Result.Monad_infix in
   let rows = List.init count ~f:(Buffer.get buffer) in 
-  let prepare_table_result = 
-    List.transpose rows |> Result.of_option ~error:"Column counts not the same for all rows" >>= fun transposed ->
-    List.zip header transposed |> Result.of_option ~error:"Header size does not match column count" >>| fun columns -> 
-    let column_hints = List.map columns ~f:(fun (label, column) -> 
-      let width = Option.value_exn (List.max_elt (List.map ~f:String.length (label::column))
-        ~cmp:(fun a b -> a - b)) in
-      {label; width}
-    ) in
-    (column_hints, rows) in
-  Result.map prepare_table_result ~f:(fun (column_hints, rows) ->  draw_table ~show_header ~column_hints ~rows)
+  Table_hints.caclulate ~header ~buffer ~count >>| fun column_hints ->  
+  draw_table ~show_header ~column_hints ~rows
 
 let read_n_lines buffer chan n =
   let rec loop n = 
