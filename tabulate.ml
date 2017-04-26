@@ -145,34 +145,36 @@ let string_format s n =
   else
     s ^ (String.init (n - len) ~f:(fun _ -> ' '))
 
-let draw_data_row column_hints row =
-  let data = List.zip_exn column_hints row in
-  let cell_fn ({Table_hints.width; _}, text) = string_format text width in
+let draw_data_row row ~column_widths=
+  let data = List.zip_exn column_widths row in
+  let cell_fn (width, text) = string_format text width in
   draw_row borders.(3) cell_fn data
 
-let draw_separator index column_hints =
-  let cell_fn {Table_hints.width; _} = draw_n width hline in
-  draw_row index cell_fn column_hints
+let draw_separator border ~column_widths =
+  let cell_fn width = draw_n width hline in
+  draw_row border cell_fn column_widths
 
-let draw_table ~show_header ~column_hints ~rows =
+let draw_table ~show_header ~header_labels ~column_widths  ~rows  =
   List.concat [
-    [draw_separator borders.(0) column_hints];
+    [draw_separator borders.(0) ~column_widths];
     if show_header then
       [
-        draw_data_row column_hints (List.map ~f:(fun {label; _} -> label) column_hints);
-        draw_separator borders.(1) column_hints
+        draw_data_row ~column_widths header_labels;
+        draw_separator borders.(1) ~column_widths
       ]
     else 
       [];
-    List.map rows ~f:(fun row -> draw_data_row column_hints row);
-    [draw_separator borders.(2) column_hints]
+    List.map rows ~f:(fun row -> draw_data_row ~column_widths row);
+    [draw_separator borders.(2) ~column_widths]
   ]
 
 let tabulate_lines ~table_hints ~show_header ~buffer ~count= 
   let open Result.Monad_infix in
   let rows = List.init count ~f:(Buffer.get buffer) in 
-  table_hints >>| fun column_hints ->  
-  draw_table ~show_header ~column_hints ~rows
+  table_hints >>| fun column_hints -> 
+  let header_labels = List.map  column_hints ~f:(fun {Table_hints.label; _} -> label) in
+  let column_widths = List.map  column_hints ~f:(fun {Table_hints.width; _} -> width) in
+  draw_table ~show_header ~header_labels ~column_widths ~rows
 
 let read_n_lines buffer chan n =
   let rec loop n = 
