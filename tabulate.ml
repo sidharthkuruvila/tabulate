@@ -5,7 +5,7 @@ module Utf8 = struct
   let b3 = 0xE0
   let b2 = 0xC0
   let lst = [b4;b3;b2]
-
+  (* All unrecognizable cases are mapped to single byte *)
   let char_size str i =
     assert (i < String.length str) ;
     let c = int_of_char (String.get str i) in
