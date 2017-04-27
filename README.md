@@ -25,10 +25,14 @@ Building
 
     corebuild tabulate.native
 
+### Testing the build
+
+    pip3 install -r test_data/requirements.txt
+    python3 test_data/gen_csv.py | ./tabulate.native -csv-separator ,
 
 Examples
 --------
-
+  
 
     $ cat example.tsv | ./tabulate.native
 
